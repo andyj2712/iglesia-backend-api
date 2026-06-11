@@ -66,7 +66,7 @@ class ScheduleController extends Controller
 
             // Si el usuario asignado tiene su celular registrado (fcm_token)
             if ($assignedUser && $assignedUser->fcm_token) {
-                $factory = (new Factory)->withServiceAccount(storage_path('firebase-credentials.json'));
+                $factory = (new Factory)->withServiceAccount(json_decode(env('FIREBASE_CREDENTIALS'), true));
                 $messaging = $factory->createMessaging();
 
                 // Formateamos la fecha visualmente para el mensaje

@@ -89,7 +89,7 @@ class AnnouncementController extends Controller
 
             // 2. Si hay teléfonos registrados, disparamos el mensaje
             if (!empty($tokens)) {
-                $factory = (new Factory)->withServiceAccount(storage_path('firebase-credentials.json'));
+                $factory = (new Factory)->withServiceAccount(json_decode(env('FIREBASE_CREDENTIALS'), true));
                 $messaging = $factory->createMessaging();
 
                 $message = CloudMessage::new()->withNotification(
