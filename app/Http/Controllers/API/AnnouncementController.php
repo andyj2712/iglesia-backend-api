@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Announcement;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage; 
 use App\Models\User;
 use Kreait\Firebase\Factory;
 use Kreait\Firebase\Messaging\CloudMessage;
@@ -34,7 +35,7 @@ class AnnouncementController extends Controller
     }
 
     /**
-     * Crear una nueva publicación con imagen en la nube.
+     * Crear una nueva publicación (Guardando la imagen en el servidor).
      */
     public function store(Request $request)
     {
@@ -42,7 +43,7 @@ class AnnouncementController extends Controller
             'ministry_id' => 'nullable|exists:ministries,id',
             'title' => 'required|string|max:255',
             'content' => 'required|string',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:5120' // Aumentamos límite a 5MB por si toman fotos pesadas
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:5120'
         ]);
 
         if ($validator->fails()) {
@@ -51,12 +52,12 @@ class AnnouncementController extends Controller
 
         $imagePath = null;
         
-        // ─── LÓGICA DE CLOUDINARY ───
+        // ─── LÓGICA DE ALMACENAMIENTO LOCAL ───
         if ($request->hasFile('image')) {
-            // Sube la foto directamente a los servidores de Cloudinary en una carpeta 'muro_iglesia'
-            $imagePath = cloudinary()->upload($request->file('image')->getRealPath(), [
-                'folder' => 'muro_iglesia'
-            ])->getSecurePath();
+            // Guarda la imagen en la carpeta storage/app/public/announcements
+            $path = $request->file('image')->store('announcements', 'public');
+            // Genera la URL pública (Ej: /storage/announcements/xxx.jpg)
+            $imagePath = Storage::url($path); 
         }
 
         $announcement = Announcement::create([
@@ -64,10 +65,10 @@ class AnnouncementController extends Controller
             'user_id' => $request->user()->id,
             'title' => $request->title,
             'content' => $request->content,
-            'image_path' => $imagePath // Se guardará la URL segura de Cloudinary (https://res.cloudinary.com/...)
+            'image_path' => $imagePath
         ]);
 
-        // ─── LÓGICA DE NOTIFICACIONES PUSH (FIREBASE) ───
+        // ─── NOTIFICACIONES FIREBASE ───
         try {
             $query = User::whereNotNull('fcm_token')->where('id', '!=', $request->user()->id);
             if ($request->ministry_id) {
@@ -86,7 +87,7 @@ class AnnouncementController extends Controller
                 $messaging->sendMulticast($message, $tokens);
             }
         } catch (\Exception $e) {
-            \Log::error('Error enviando notificación de anuncio: ' . $e->getMessage());
+            \Log::error('Error enviando notificación: ' . $e->getMessage());
         }
 
         return response()->json([
@@ -96,7 +97,7 @@ class AnnouncementController extends Controller
     }
 
     /**
-     * Actualizar una publicación existente.
+     * Actualizar una publicación.
      */
     public function update(Request $request, $id)
     {
@@ -110,17 +111,27 @@ class AnnouncementController extends Controller
             'ministry_id' => 'nullable|exists:ministries,id',
             'title' => 'required|string|max:255',
             'content' => 'required|string',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:5120'
         ]);
 
         if ($validator->fails()) {
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $announcement->update([
-            'ministry_id' => $request->ministry_id,
-            'title' => $request->title,
-            'content' => $request->content,
-        ]);
+        // Si mandan una nueva imagen, borramos la vieja y guardamos la nueva
+        if ($request->hasFile('image')) {
+            if ($announcement->image_path) {
+                $relativeStoragePath = str_replace('/storage/', '', $announcement->image_path);
+                Storage::disk('public')->delete($relativeStoragePath);
+            }
+            $path = $request->file('image')->store('announcements', 'public');
+            $announcement->image_path = Storage::url($path);
+        }
+
+        $announcement->ministry_id = $request->ministry_id;
+        $announcement->title = $request->title;
+        $announcement->content = $request->content;
+        $announcement->save();
 
         return response()->json([
             'message' => 'Publicación actualizada con éxito',
@@ -128,26 +139,27 @@ class AnnouncementController extends Controller
         ], 200);
     }
 
-    /**
-     * Mostrar una publicación específica.
-     */
     public function show($id)
     {
         $announcement = Announcement::with(['user:id,name', 'ministry:id,name'])->find($id);
-        if (!$announcement) return response()->json(['message' => 'Publicación no encontrada'], 404);
+        if (!$announcement) return response()->json(['message' => 'No encontrada'], 404);
         return response()->json($announcement, 200);
     }
 
     /**
-     * Eliminar un anuncio.
+     * Eliminar un anuncio (y borrar su foto local).
      */
     public function destroy($id)
     {
         $announcement = Announcement::find($id);
         if (!$announcement) return response()->json(['message' => 'Publicación no encontrada'], 404);
         
-        // Ya no eliminamos archivos locales con Storage::disk('public')->delete(), 
-        // ya que la imagen vive en la nube.
+        // Borrar imagen física del servidor de Railway
+        if ($announcement->image_path) {
+            $relativeStoragePath = str_replace('/storage/', '', $announcement->image_path);
+            Storage::disk('public')->delete($relativeStoragePath);
+        }
+
         $announcement->delete();
 
         return response()->json(['message' => 'Publicación eliminada correctamente'], 200);
