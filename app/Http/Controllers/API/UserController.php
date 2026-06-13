@@ -44,12 +44,7 @@ class UserController extends Controller
             'password' => Hash::make($request->password), // Encriptamos la contraseña
             'role_id' => $request->role_id,
         ]);
-        
-        return response()->json([
-            'message' => 'Usuario creado con éxito',
-            'user' => $user->load('role')
-        ], 201);
-
+    
         // Sincronizar los ministerios en la tabla pivot
         if ($request->has('ministry_ids')) {
             $user->ministries()->sync($request->ministry_ids);
